@@ -1,7 +1,6 @@
 flask
-line-bot-sdk==2.4.2
+line-bot-sdk
 gspread
 google-auth
 gunicorn
 aiohttp>=3.10.11
-gunicorn
