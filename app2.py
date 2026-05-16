@@ -15,16 +15,13 @@ from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 
-
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 MASTER_SHEET_ID = os.getenv("MASTER_SHEET_ID")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 
-
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
-
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -33,7 +30,6 @@ SCOPES = [
 
 
 def get_gspread_client():
-
     service_account_info = json.loads(
         os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
     )
@@ -49,20 +45,22 @@ def get_gspread_client():
 gc = get_gspread_client()
 
 
-def get_master_sheet():
+def get_month_title():
+    now = datetime.now()
+    return f"{now.year}/{now.month}"
 
+
+def get_master_sheet():
     master = gc.open_by_key(MASTER_SHEET_ID)
 
     try:
         ws = master.worksheet("users")
-
     except:
         ws = master.add_worksheet(
             title="users",
             rows=1000,
             cols=10
         )
-
         ws.append_row([
             "user_id",
             "name",
@@ -74,15 +72,11 @@ def get_master_sheet():
 
 
 def find_user(user_id):
-
     ws = get_master_sheet()
-
     records = ws.get_all_records()
 
     for index, row in enumerate(records, start=2):
-
         if row["user_id"] == user_id:
-
             return {
                 "row": index,
                 "name": row["name"],
@@ -92,34 +86,20 @@ def find_user(user_id):
     return None
 
 
-def get_month_title():
-
-    now = datetime.now()
-
-    return f"{now.year}/{now.month}"
-
-
 def setup_record_sheet(sheet):
-
-    headers = ["日期", "金額", "分類", "備註"]
-
+    headers = ["日期", "項目", "金額", "備註"]
     current = sheet.row_values(1)
 
     if current != headers:
-
         sheet.clear()
-
         sheet.append_row(headers)
 
 
 def create_user_spreadsheet(user_id, name):
-
     title = f"{name}_記帳本"
-
     spreadsheet = gc.create(title)
 
     if ADMIN_EMAIL:
-
         spreadsheet.share(
             ADMIN_EMAIL,
             perm_type="user",
@@ -129,13 +109,10 @@ def create_user_spreadsheet(user_id, name):
     month_title = get_month_title()
 
     sheet = spreadsheet.sheet1
-
     sheet.update_title(month_title)
-
     setup_record_sheet(sheet)
 
     ws = get_master_sheet()
-
     ws.append_row([
         user_id,
         name,
@@ -147,112 +124,83 @@ def create_user_spreadsheet(user_id, name):
 
 
 def get_or_create_month_sheet(spreadsheet):
-
     month_title = get_month_title()
 
     try:
-
         sheet = spreadsheet.worksheet(month_title)
-
     except:
-
         sheet = spreadsheet.add_worksheet(
             title=month_title,
             rows=1000,
             cols=10
         )
-
         setup_record_sheet(sheet)
 
     return sheet
 
 
-def record_expense(
-    spreadsheet_id,
-    amount,
-    category,
-    note=""
-):
-
+def record_expense(spreadsheet_id, item, amount, note=""):
     spreadsheet = gc.open_by_key(spreadsheet_id)
-
     sheet = get_or_create_month_sheet(spreadsheet)
 
     today = datetime.now().strftime("%Y/%m/%d")
 
     sheet.append_row([
         today,
+        item,
         amount,
-        category,
         note
     ])
 
 
 def monthly_summary(spreadsheet_id):
-
     spreadsheet = gc.open_by_key(spreadsheet_id)
-
     sheet = get_or_create_month_sheet(spreadsheet)
 
     records = sheet.get_all_records()
 
     total = 0
-
-    category_sum = defaultdict(int)
+    item_sum = defaultdict(int)
 
     for row in records:
-
         try:
-
             amount = int(row["金額"])
-
-            category = row["分類"]
+            item = row["項目"]
 
             total += amount
-
-            category_sum[category] += amount
+            item_sum[item] += amount
 
         except:
             pass
 
     if total == 0:
-
         return "本月目前沒有記帳資料。"
 
     lines = [
         f"本月總支出：{total} 元",
         "",
-        "分類統計："
+        "項目統計："
     ]
 
-    for category, amount in category_sum.items():
-
-        lines.append(
-            f"{category}：{amount} 元"
-        )
+    for item, amount in item_sum.items():
+        lines.append(f"{item}：{amount} 元")
 
     return "\n".join(lines)
 
 
 @app.route("/", methods=["GET"])
 def home():
-
     return "LINE Expense Bot is running."
 
 
 @app.route("/callback", methods=["POST"])
 def callback():
-
     signature = request.headers.get("X-Line-Signature")
-
     body = request.get_data(as_text=True)
 
     try:
-
         handler.handle(body, signature)
-
     except InvalidSignatureError:
-
         abort(400)
 
     return "OK"
@@ -260,42 +208,23 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-
     user_id = event.source.user_id
-
     text = event.message.text.strip()
 
     user = find_user(user_id)
 
     if text.startswith("設定名稱"):
-
-        name = text.replace(
-            "設定名稱",
-            ""
-        ).strip()
+        name = text.replace("設定名稱", "").strip()
 
         if not name:
-
             reply_text = "請輸入：設定名稱 你的名字"
 
         elif user:
-
-            reply_text = (
-                f"你已經建立過記帳本："
-                f"{user['name']}_記帳本"
-            )
+            reply_text = f"你已經建立過記帳本：{user['name']}_記帳本"
 
         else:
-
-            create_user_spreadsheet(
-                user_id,
-                name
-            )
-
-            reply_text = (
-                f"已建立專屬記帳本："
-                f"{name}_記帳本"
-            )
+            create_user_spreadsheet(user_id, name)
+            reply_text = f"已建立專屬記帳本：{name}_記帳本"
 
         line_bot_api.reply_message(
             event.reply_token,
@@ -304,9 +233,7 @@ def handle_message(event):
 
         return
 
-
     if not user:
-
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(
@@ -316,12 +243,8 @@ def handle_message(event):
 
         return
 
-
     if text == "本月":
-
-        reply_text = monthly_summary(
-            user["spreadsheet_id"]
-        )
+        reply_text = monthly_summary(user["spreadsheet_id"])
 
         line_bot_api.reply_message(
             event.reply_token,
@@ -330,47 +253,34 @@ def handle_message(event):
 
         return
 
-
     parts = text.split()
 
     if len(parts) < 2:
-
         reply_text = (
             "格式錯誤\n"
-            "例如：300 午餐"
+            "例如：晚餐全家 70"
         )
 
     else:
-
-        amount = parts[0]
-
-        category = parts[1]
-
-        note = (
-            " ".join(parts[2:])
-            if len(parts) > 2
-            else ""
-        )
+        amount = parts[-1]
+        item = " ".join(parts[:-1])
+        note = ""
 
         if not amount.isdigit():
-
             reply_text = (
-                "金額必須是數字\n"
-                "例如：300 午餐"
+                "金額必須放最後面\n"
+                "例如：晚餐全家 70"
             )
 
         else:
-
             record_expense(
                 user["spreadsheet_id"],
+                item,
                 int(amount),
-                category,
                 note
             )
 
-            reply_text = (
-                f"已記錄：{amount} 元｜{category}"
-            )
+            reply_text = f"已記錄：{item} {amount}元"
 
     line_bot_api.reply_message(
         event.reply_token,
@@ -379,5 +289,4 @@ def handle_message(event):
 
 
 if __name__ == "__main__":
-
     app.run(debug=True)
